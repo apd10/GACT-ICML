@@ -35,11 +35,14 @@ class Controller:
 
         self.bit = config.bit
         self.iter = 0
+        self.installed = False
 
     def __del__(self):
-        self.uninstall_hook()
+        if self.installed:
+            self.uninstall_hook()
 
     def install_hook(self):
+        self.installed = True
         def pack_hook(x):
             r = self.quantize(x)
             del x
@@ -76,6 +79,8 @@ class Controller:
             self.ap.iterate_wrapper(get_grad)
         self.iter += 1
         self.quantizer.seed_iter = self.iter
+        if self.iter == 1:
+            print(self.quantizer.function_based_memory)
 
     def quantize(self, input):
         if not config.compress_activation:

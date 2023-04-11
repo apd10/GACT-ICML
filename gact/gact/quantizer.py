@@ -1,8 +1,21 @@
 import torch
+from torch.overrides import TorchFunctionMode
 from gact.conf import config
 from gact.ops import op_quantize, op_dequantize, op_quantize_mask, op_dequantize_mask
 from gact.utils import uniform_sample, compute_tensor_bytes
 
+P = 9000011
+current_func = None
+class set_current_func(TorchFunctionMode):
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        global current_func, current_args
+
+        if not kwargs:
+            kwargs = {}
+        current_func = func
+        out = func(*args, **kwargs)
+        current_func = None
+        return out
 
 class Quantizer:
     """
@@ -33,10 +46,18 @@ class Quantizer:
         self.seeds = {}
         self.bits = {}
         self.dims = {}
+        self.dim_shape = {}
+        self.function_types = {}
+        self.function_based_memory = {}
+        self.use_rp = {}
+        
 
         self.iter = 0  # total number of iterations, including the extra inter for auto precision
         # iteration for seed, share the same seed_iter for the same auto precision adaptive step
         self.seed_iter = 0
+
+        #linear stats
+        self.linear_packs = 0
 
     def filter_tensors(self, pairs):
         for _, v in pairs:
@@ -69,6 +90,7 @@ class Quantizer:
         return True, False
 
     def __del__(self):
+        print("Linear packs", self.linear_packs)
         del self.ptr_qtensor_map
         del self.layer_key_map
         del self.unrelated_tensors
@@ -95,8 +117,20 @@ class Quantizer:
     def quantize(self, input):
         quantize, is_dropout_mask = self.check_quantize(input)
 
+
         if not quantize:
             return False, input
+
+        if self.iter == 0:
+            if current_func is not None:
+                  name = current_func.__name__
+            else:
+                  name = 'none'
+            
+            if  name in self.function_based_memory.keys():
+                self.function_based_memory[name]  += input.numel()
+            else:
+                self.function_based_memory[name]  = input.numel()
 
         # special case: use 1 bit to quantize dropout mask
         if is_dropout_mask:
@@ -110,18 +144,34 @@ class Quantizer:
         key = self.generate_tensor_key(input, tid)
         self.layer_key_map[tid] = key
         skip_quantize = key in self.ptr_qtensor_map
+        islinear = False
 
         if not skip_quantize:
             if self.iter == 0:
                 bit = self.default_bit
                 self.bits[tid] = bit
                 self.dims[tid] = input.numel()
+                self.dim_shape[tid] = input.shape
                 self.seeds[tid] = tid
+                self.use_rp[tid] = False
+                if current_func is not None:
+                    self.function_types[tid] = current_func.__name__
+                else:
+                    self.function_types[tid] = 'none'
             else:
                 bit = self.bits[tid]
             # quantize
-            q_inputs = op_quantize(
-                input, bit, self.seeds[tid] + self.seed_iter)
+            #if self.bits[tid] == 1 and self.function_types[tid] in ['linear']:
+            if self.use_rp[tid]:
+                #print("linear pack")
+                q_inputs = self.pack_linear(input, float(bit)/32, self.seeds[tid] + self.seed_iter)
+                islinear = True
+            else:
+                #if self.function_types[tid] == 'relu':
+                #    input = (input > 0).type(torch.float)
+                assert(bit >= 1)
+                q_inputs = op_quantize(
+                    input, int(bit), self.seeds[tid] + self.seed_iter)
             if self.swap:
                 #  with torch.cuda.stream(self.swap_out_stream):
                 # self.swap_out_stream.wait_stream(self.compute_stream)
@@ -139,7 +189,7 @@ class Quantizer:
         else:
             # increase the ref count
             self.ptr_qtensor_map[key][1] += 1
-        return True, is_dropout_mask, key, input_shape, tid
+        return True, is_dropout_mask, key, input_shape, tid, islinear
 
     def dequantize(self, input):
         quantized = input[0]
@@ -152,7 +202,7 @@ class Quantizer:
             ret = op_dequantize_mask(q_inputs)
             return ret
 
-        _, _, key, input_shape, tid = input
+        _, _, key, input_shape, tid, islinear = input
         q_inputs, ref_cnt, key_tid = self.ptr_qtensor_map[key]
 
         if self.start_bwd and self.swap:
@@ -182,7 +232,12 @@ class Quantizer:
                             )
                     self.end_prefetch_event.record()
 
-        ret = op_dequantize(q_inputs, input_shape)
+
+        if islinear:
+            #print("linear unpack" )
+            ret = self.unpack_linear(q_inputs)
+        else:
+            ret = op_dequantize(q_inputs, input_shape)
 
         ref_cnt -= 1
         if ref_cnt < 0:
@@ -193,3 +248,74 @@ class Quantizer:
         else:
             self.ptr_qtensor_map[key] = [q_inputs, ref_cnt, key_tid]
         return ret
+
+
+
+    def pack_linear(self, x, compression_factor, seed):
+        ''' this function is to pack saved variables for linear layer 
+            assumes that model weights have already been filtered before this 
+        '''
+        orig_dtype = x.dtype
+        #x = x.half()
+        self.linear_packs += 1
+        gen = torch.Generator()
+        gen.manual_seed(seed)
+        random = torch.randint(0, P, (4,), generator=gen)
+        A,B,C,D = random[0], random[1], random[2], random[3]
+        #print("random", seed, A, B, C, D)
+        shape = x.shape # this is a 2d thing
+        assert(len(shape) == 2)
+        cshape = (int(shape[0] * compression_factor), shape[1])
+        #print("Pack Linear", shape, cshape, compression_factor)
+        
+        compressed_x = torch.zeros(cshape, dtype=x.dtype, device=x.device)
+
+        for i in range(int((shape[0] + cshape[0] - 1)/ cshape[0])):
+            idx = ((A*i + B) % P % cshape[0])
+            g = 2*((C*i + D) % P % 2) - 1
+            #print(i, idx, g)
+            
+            start = i*cshape[0]
+            tlen = min((i+1)*cshape[0], shape[0]) - start
+            p1_len = min(cshape[0] - idx, tlen)
+            p2_len = tlen - p1_len
+
+            #p1_len at idx
+            compressed_x[idx:idx+p1_len] += g * x[start:start+p1_len]
+            compressed_x[0:p2_len] += g * x[start+p1_len:start+tlen]
+
+            #print(i, g, idx, idx+p1_len, "<--  x[]", start, start+p1_len)
+            #print(i, g, 0, p2_len, "<--  x[]", start+p1_len, start+tlen)
+            #print(compressed_x.view(-1))
+
+        #print("PACK LINEAR", id(current_func), x.shape, "-->", compressed_x.shape)
+        del x
+
+        return (compressed_x, shape, A, B, C, D, orig_dtype)
+
+    def unpack_linear(self, x):
+        ''' this function is to pack saved variables for linear layer 
+            assumes that model weights have already been filtered before this 
+        '''
+        compressed_x, shape, A, B, C, D, orig_dtype = x
+        #print("UNPACK LINEAR", id(current_func), compressed_x.shape)
+        cshape = compressed_x.shape
+        x = torch.zeros(shape, dtype=compressed_x.dtype, device=compressed_x.device)
+        for i in range(int((shape[0] + cshape[0] - 1)/ cshape[0])):
+            idx = ((A*i + B) % P % cshape[0])
+            g = 2*((C*i + D) % P % 2) - 1
+            
+            start = i*cshape[0]
+            tlen = min((i+1)*cshape[0], shape[0]) - start
+            p1_len = min(cshape[0] - idx, tlen)
+            p2_len = tlen - p1_len
+
+            #p1_len at idx
+            x[start:start+p1_len] = compressed_x[idx:idx+p1_len] * g 
+            x[start+p1_len:start+tlen] = compressed_x[0:p2_len]* g
+            #print(i, g, idx, idx+p1_len, "-->  x[]", start, start+p1_len)
+            #print(i, g, 0, p2_len, "-->  x[]", start+p1_len, start+tlen)
+            #print(x.view(-1))
+        
+        del compressed_x
+        return x.type(orig_dtype)

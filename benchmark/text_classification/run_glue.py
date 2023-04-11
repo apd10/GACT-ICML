@@ -29,6 +29,7 @@ import time
 import gact
 from gact.utils import get_memory_usage, exp_recorder
 from utils import AverageMeter
+from gact.quantizer import set_current_func
 
 import transformers
 from accelerate import Accelerator
@@ -72,8 +73,15 @@ metric_key = {
     'sst2': 'accuracy',
     'mnli': 'accuracy',
     'qnli': 'accuracy',
-    'qqp': 'f1'
+    'qqp': 'f1',
+    'stsb' : 'pearson',
+    'wnli' : 'accuracy',
+    'rte' : 'accuracy',
+    'mnli_mismatched' : 'accuracy',
+    'mnli_matched' : 'accuracy',
+    'cola' : 'matthews_correlation',
 }
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a text classification task")
@@ -499,7 +507,7 @@ def main():
     iter = 0
     best_metric = 0
     batch_total_time = 0
-    with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
+    with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook), set_current_func() :
         for epoch in range(args.num_train_epochs):
             model.train()
             for step, batch in enumerate(train_dataloader):
@@ -640,15 +648,15 @@ def main():
             if eval_metric[metric_key[args.task_name]] > best_metric:
                 best_metric = eval_metric[metric_key[args.task_name]]
 
-            if args.push_to_hub and epoch < args.num_train_epochs - 1:
-                accelerator.wait_for_everyone()
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
-                if accelerator.is_main_process:
-                    tokenizer.save_pretrained(args.output_dir)
-                    repo.push_to_hub(
-                        commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
-                    )
+            #if args.push_to_hub and epoch < args.num_train_epochs - 1:
+            #    accelerator.wait_for_everyone()
+            #    unwrapped_model = accelerator.unwrap_model(model)
+            #    unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
+            #    if accelerator.is_main_process:
+            #        tokenizer.save_pretrained(args.output_dir)
+            #        repo.push_to_hub(
+            #            commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
+            #        )
 
         if args.output_dir is not None:
             accelerator.wait_for_everyone()

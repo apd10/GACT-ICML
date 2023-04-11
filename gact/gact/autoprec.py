@@ -1,11 +1,13 @@
 import os
 import random
+import pprint
 
 import torch
 import torch.nn as nn
 import numpy as np
 from gact.utils import exp_recorder, uniform_sample
 import gact.cpp_extension.calc_precision as ext_calc_precision
+from gact.conf import config
 
 # Automatically compute the precision and update quantization bits for each tensor
 class AutoPrecision:
@@ -20,6 +22,7 @@ class AutoPrecision:
         self.dims = None
         self.bits = {}  # bits for each tensor
         self.C = {}  # Sensitivity for each tensor
+        self.backup_bits = {} # to keep backup to reset after RP change
 
         self.avg_bits = bits
         self.max_bits = max_bits
@@ -42,6 +45,7 @@ class AutoPrecision:
         for l in self.dims:
             self.C[l] = 1.0
             self.bits[l] = self.avg_bits
+            self.backup_bits[l] = self.avg_bits
             total_ele += self.dims[l]
         self.total_bits = self.avg_bits * total_ele
 
@@ -104,7 +108,10 @@ class AutoPrecision:
             print('GACT: Initializing AutoPrec..., run extra %d iters' %
                   (len(self.quantizer.bits)))
             # use different random seeds to update snesitivity
+                
+            self.quantizer.bits = self.backup_bits.copy()
             for l in self.quantizer.bits:
+                self.quantizer.use_rp[l] = False
                 b = self.quantizer.bits[l]
                 self.quantizer.bits[l] = 1
                 grad0 = get_grad()
@@ -125,8 +132,20 @@ class AutoPrecision:
                 else:
                     self.C[l] = sens.item()
                 self.quantizer.bits[l] = b
-            # refresh bits based on sensitivity
+            #refresh bits based on sensitivity
             self.refresh_bits()
+
+            self.backup_bits = self.quantizer.bits.copy()
+            
+            for tid in range(len(self.quantizer.bits)):
+                if self.quantizer.function_types[tid] in config.linear_packs:
+                    if self.quantizer.bits[tid] <= 4 and self.quantizer.dim_shape[tid][0] > 1000:
+                        self.quantizer.bits[tid] = float(self.quantizer.bits[tid]) / config.rp_additional_factor
+                        self.quantizer.use_rp[tid] = True
+
+                if self.quantizer.function_types[tid] == 'relu':
+                      self.quantizer.bits[tid] = 1
+            self.debug_print()
 
         if self.debug and self.iter % self.adapt_interval == 0:
             # Debug information
@@ -232,3 +251,48 @@ class AutoPrecision:
                 exp_recorder.record("overall var", overall_var.tolist())
                 exp_recorder.dump(self.work_dir + "autoprec.log")
                 print("========================================")
+    def debug_print(self):
+            #print(self.quantizer.dims)
+            #print(self.quantizer.bits)
+            #print(self.quantizer.use_rp)
+            #print(self.quantizer.function_types)
+            dic = {}
+            s = 0
+            n = 0
+            for i in range(len(self.quantizer.bits)):
+                f = self.quantizer.function_types[i]
+                d = self.quantizer.dims[i]
+                ds = self.quantizer.dim_shape[i]
+                b = self.quantizer.bits[i]
+                rp = self.quantizer.use_rp[i]
+                s+=d*b
+                n+=d
+                if f in dic.keys():
+                      dic[f]['dims'].append(d)
+                      dic[f]['bits'].append(b)
+                      dic[f]['rps'].append(rp)
+                      dic[f]['dim_shapes'].append(ds)
+
+                      dic[f]['dim'] += d
+                      dic[f]['bit'] += b*d
+                else:
+                      dic[f] = {}
+                      dic[f]['dims'] = [d]
+                      dic[f]['dim_shapes'] = [ds]
+                      dic[f]['bits'] = [b]
+                      dic[f]['rps'] = [rp]
+
+                      dic[f]['dim'] = d
+                      dic[f]['bit'] = b*d
+
+            for f in dic.keys():
+                dic[f]['bit'] = dic[f]['bit'] / dic[f]['dim']
+                #dic[f]['dims'] = dic[f]['dims'][:10]
+                #dic[f]['bits'] = dic[f]['bits'][:10]
+                #dic[f]['rps'] = dic[f]['rps'][:10]
+              
+
+            pp = pprint.PrettyPrinter(indent=4)
+            pp.pprint(dic)
+            print("Total Compression in bits/elem:", s/n)
+            print("", flush=True)

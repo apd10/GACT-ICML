@@ -10,15 +10,75 @@ def set_optimization_level(level):
     elif level == 'L1.2':    # fixed 2-bit
         config.auto_prec = False
         config.bit = 2
-    elif level == 'L2':  # auto precision 4-bit
+    elif level == 'L4':  # auto precision 4-bit
         config.auto_prec = True
         config.bit = 4
-    elif level == 'L2.1':  # auto precision 3-bit
+    elif level == 'L3':  # auto precision 3-bit
         config.auto_prec = True
         config.bit = 3
-    elif level == 'L2.2':  # auto precision 2-bit
+    elif level == 'L2':  # auto precision 2-bit
         config.auto_prec = True
         config.bit = 2
+    elif level == 'R2.1':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 1.0
+        config.linear_packs = ['linear']
+    elif level == 'R2.2':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 2
+        config.linear_packs = ['linear']
+    elif level == 'R2.4':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 4
+        config.linear_packs = ['linear']
+    elif level == 'R2.8':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 8
+        config.linear_packs = ['linear']
+    elif level == 'R3.1':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 3
+        config.rp_additional_factor = 1.0
+        config.linear_packs = ['linear']
+    elif level == 'R3.2':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 3
+        config.rp_additional_factor = 2
+        config.linear_packs = ['linear']
+    elif level == 'R3.4':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 3
+        config.rp_additional_factor = 4
+        config.linear_packs = ['linear']
+    elif level == 'R3.8':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 3
+        config.rp_additional_factor = 8
+        config.linear_packs = ['linear']
+    elif level == 'R4.1':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 1.0
+        config.linear_packs = ['linear']
+    elif level == 'R4.2':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 2
+        config.linear_packs = ['linear']
+    elif level == 'R4.4':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 4
+        config.linear_packs = ['linear']
+    elif level == 'R4.8':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 8
+        config.linear_packs = ['linear']
     elif level == 'L3':  # auto precision 4-bit + swap
         config.auto_prec = True
         config.bit = 4
@@ -67,6 +127,7 @@ class QuantizationConfig:
         # Memory management flag
         self.swap = False
         self.prefetch = False
+        self.linear_packs = []
 
 
 config = QuantizationConfig()

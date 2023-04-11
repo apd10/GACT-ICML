@@ -12,6 +12,7 @@ import gact
 from gact import config
 from gact.controller import Controller  # import gact controller
 from gact.utils import get_memory_usage, exp_recorder
+from gact.quantizer import set_current_func
 
 from utils import AverageMeter
 
@@ -19,6 +20,7 @@ from cogdl.datasets.ogb import OGBArxivDataset
 from models import GCN, SAGE, GAT
 from thop import profile
 import json
+from torchviz import make_dot
 
 wandb.init(project="gact-Graph")
 parser = argparse.ArgumentParser(description="GNN (gact)")
@@ -37,6 +39,7 @@ parser.add_argument("--gact", action="store_true")
 parser.add_argument("--get-mem", action="store_true")
 parser.add_argument("--get-speed", action="store_true")
 parser.add_argument("--get-macs", action="store_true")
+parser.add_argument("--make_dot", action="store_true")
 args = parser.parse_args()
 
 wandb.config.update(args)
@@ -130,7 +133,7 @@ def accuracy(y_pred, y_true):
 batch_total_time = 1
 train_ips_list = []
 # install hook
-with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
+with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook), set_current_func():
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -160,6 +163,9 @@ with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
         output = model(graph)
         loss = F.cross_entropy(
             output[graph.train_mask], graph.y[graph.train_mask])
+        if i == 0 and args.make_dot:
+            make_dot(loss.mean(), params=dict(model.named_parameters()), show_attrs=True, show_saved=True).render("gcn", "svg")
+        
         # measure accuracy and record loss
         losses.update(loss.detach().item())
 
@@ -218,15 +224,16 @@ with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
             val_loss = F.cross_entropy(
                 logits[graph.val_mask], graph.y[graph.val_mask]).item()
             val_acc = accuracy(logits[graph.val_mask], graph.y[graph.val_mask])
-
+            test_acc = accuracy(logits[graph.test_mask], graph.y[graph.test_mask])
         epoch_iter.set_description(
-            f"Epoch: {i}" + " val_loss: %.4f" % val_loss + " val_acc: %.4f" % val_acc)
+            f"Epoch: {i}" + " val_loss: %.4f" % val_loss + " val_acc: %.4f" % val_acc + " test_acc: %.4f" % test_acc)
         wandb.log({"train_loss": loss.item(),
                   "val_loss": val_loss, "val_acc": val_acc})
         if val_acc > best_acc:
             best_acc = val_acc
             patience = 0
             best_model = copy.deepcopy(model)
+            final_test_acc = test_acc
         else:
             patience += 1
             if patience >= args.patience:
@@ -262,15 +269,19 @@ with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
         if quantize:
             controller.iterate(get_grad)
 
-    model = best_model
-    model.eval()
-    with torch.no_grad():
-        logits = model(graph)
-        test_acc = accuracy(logits[graph.test_mask], graph.y[graph.test_mask])
-        print("Final Test Acc:", test_acc)
-        wandb.log({"test_acc": test_acc})
+    #model = best_model
+    #model.eval()
+    #with torch.no_grad():
+    #    logits = model(graph)
+    #    test_acc = accuracy(logits[graph.test_mask], graph.y[graph.test_mask])
+    #    print("Final Test Acc:", test_acc)
+    #    wandb.log({"test_acc": test_acc})
+    print("Final test acc", final_test_acc)
 
     if get_mem:
         print("Peak %d MB" % (peak_mem.get_value() / 1024 / 1024))
         print("Total %d MB" % (total_mem.get_value() / 1024 / 1024))
         print("Activation %d MB" % (activation_mem.get_value() / 1024 / 1024))
+
+    if quantize and config.compress_activation:
+        print("Total linear packs", controller.quantizer.linear_packs)
