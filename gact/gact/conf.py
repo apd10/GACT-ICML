@@ -19,6 +19,57 @@ def set_optimization_level(level):
     elif level == 'L2':  # auto precision 2-bit
         config.auto_prec = True
         config.bit = 2
+
+    elif level == 'G2.1':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 1.0
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G2.2':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 2
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G2.4':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 4
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'lm_R2.4':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 4
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G2.8':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 8
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G2.16':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 16
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G4.1':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 1.0
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G4.2':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 2
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G4.4':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 4
+        config.linear_packs = ['linear', 'matmul']
+    elif level == 'G4.8':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 4
+        config.rp_additional_factor = 8
+        config.linear_packs = ['linear', 'matmul']
     elif level == 'R2.1':  # auto precision 2-bit
         config.auto_prec = True
         config.bit = 2
@@ -34,30 +85,20 @@ def set_optimization_level(level):
         config.bit = 2
         config.rp_additional_factor = 4
         config.linear_packs = ['linear']
+    elif level == 'lm_R2.4':  # auto precision 2-bit
+        config.auto_prec = True
+        config.bit = 2
+        config.rp_additional_factor = 4
+        config.linear_packs = ['linear']
     elif level == 'R2.8':  # auto precision 2-bit
         config.auto_prec = True
         config.bit = 2
         config.rp_additional_factor = 8
         config.linear_packs = ['linear']
-    elif level == 'R3.1':  # auto precision 2-bit
+    elif level == 'R2.16':  # auto precision 2-bit
         config.auto_prec = True
-        config.bit = 3
-        config.rp_additional_factor = 1.0
-        config.linear_packs = ['linear']
-    elif level == 'R3.2':  # auto precision 2-bit
-        config.auto_prec = True
-        config.bit = 3
-        config.rp_additional_factor = 2
-        config.linear_packs = ['linear']
-    elif level == 'R3.4':  # auto precision 2-bit
-        config.auto_prec = True
-        config.bit = 3
-        config.rp_additional_factor = 4
-        config.linear_packs = ['linear']
-    elif level == 'R3.8':  # auto precision 2-bit
-        config.auto_prec = True
-        config.bit = 3
-        config.rp_additional_factor = 8
+        config.bit = 2
+        config.rp_additional_factor = 16
         config.linear_packs = ['linear']
     elif level == 'R4.1':  # auto precision 2-bit
         config.auto_prec = True

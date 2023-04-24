@@ -16,11 +16,12 @@ from gact.quantizer import set_current_func
 
 from utils import AverageMeter
 
-from cogdl.datasets.ogb import OGBArxivDataset
+from cogdl.datasets.ogb import OGBArxivDataset, OGBProductsDataset, OGBPapers100MDataset
 from models import GCN, SAGE, GAT
 from thop import profile
 import json
 from torchviz import make_dot
+import pandas as pd
 
 wandb.init(project="gact-Graph")
 parser = argparse.ArgumentParser(description="GNN (gact)")
@@ -30,28 +31,39 @@ parser.add_argument("--dropout", type=float, default=0.5)
 parser.add_argument("--lr", type=float, default=0.01)
 parser.add_argument("--epochs", type=int, default=500)
 parser.add_argument("--patience", type=int, default=100)
+parser.add_argument("--seed", type=int, default=101112)
 parser.add_argument("--model", type=str, default="gcn")
-parser.add_argument("--level", type=str, default="L2.2")
+parser.add_argument("--level", type=str, default="L0")
 parser.add_argument("--nhead", type=int, default=3)
 parser.add_argument("--norm", type=str, default="batchnorm")
 parser.add_argument("--activation", type=str, default="relu")
+parser.add_argument("--dataset", type=str, default="arxiv")
 parser.add_argument("--gact", action="store_true")
 parser.add_argument("--get-mem", action="store_true")
 parser.add_argument("--get-speed", action="store_true")
 parser.add_argument("--get-macs", action="store_true")
 parser.add_argument("--make_dot", action="store_true")
 args = parser.parse_args()
-
 wandb.config.update(args)
 
 quantize = args.gact
 get_mem = args.get_mem
 get_speed = args.get_speed
 
+torch.manual_seed(args.seed)
+
 device = torch.device("cuda:0")
 
+if args.dataset == "arxiv":
+    dataset = OGBArxivDataset()
+elif args.dataset == "products":
+    dataset = OGBProductsDataset()
+elif args.dataset == "100m":
+    dataset = OGBPapers100MDataset()
+else:
+    raise NotImplementedError
 
-dataset = OGBArxivDataset()
+print ("dataset loaded", args.dataset)
 graph = dataset[0]
 graph.add_remaining_self_loops()
 graph.apply(lambda x: x.to(device))
@@ -149,9 +161,10 @@ with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook), set_curre
 
     if get_mem:
        init_mem = get_memory_usage(True)
+    val_accs = []
+    val_losses = []
  
     for i in epoch_iter:
-        
         if get_speed:
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
@@ -225,15 +238,23 @@ with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook), set_curre
                 logits[graph.val_mask], graph.y[graph.val_mask]).item()
             val_acc = accuracy(logits[graph.val_mask], graph.y[graph.val_mask])
             test_acc = accuracy(logits[graph.test_mask], graph.y[graph.test_mask])
+            test_loss = F.cross_entropy(
+                logits[graph.test_mask], graph.y[graph.test_mask]).item()
         epoch_iter.set_description(
-            f"Epoch: {i}" + " val_loss: %.4f" % val_loss + " val_acc: %.4f" % val_acc + " test_acc: %.4f" % test_acc)
+            f"Epoch: {i}" + " val_loss: %.4f" % val_loss + " val_acc: %.4f" % val_acc + " test_acc: %.4f" % test_acc + " test_loss: %.4f " % test_loss)
+        print("")
+        print("epoch", i, "val_loss", val_loss, "val_acc", val_acc, "test_loss", test_loss, "test_acc", test_acc, flush=True)
         wandb.log({"train_loss": loss.item(),
                   "val_loss": val_loss, "val_acc": val_acc})
+        #print("epoch", i, val_loss, val_acc)
         if val_acc > best_acc:
             best_acc = val_acc
             patience = 0
             best_model = copy.deepcopy(model)
             final_test_acc = test_acc
+            final_test_loss = test_loss
+            final_val_loss = val_loss
+            final_val_acc = val_acc
         else:
             patience += 1
             if patience >= args.patience:
@@ -276,7 +297,7 @@ with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook), set_curre
     #    test_acc = accuracy(logits[graph.test_mask], graph.y[graph.test_mask])
     #    print("Final Test Acc:", test_acc)
     #    wandb.log({"test_acc": test_acc})
-    print("Final test acc", final_test_acc)
+    print("Final test acc", final_test_acc, "Final test loss", final_test_loss, "final val acc", final_val_acc, "final val loss", final_val_loss)
 
     if get_mem:
         print("Peak %d MB" % (peak_mem.get_value() / 1024 / 1024))
@@ -285,3 +306,4 @@ with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook), set_curre
 
     if quantize and config.compress_activation:
         print("Total linear packs", controller.quantizer.linear_packs)
+

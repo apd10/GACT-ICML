@@ -4,7 +4,8 @@ from gact.conf import config
 from gact.ops import op_quantize, op_dequantize, op_quantize_mask, op_dequantize_mask
 from gact.utils import uniform_sample, compute_tensor_bytes
 
-P = 9000011
+#P = 9000011
+P = 2038074743
 current_func = None
 class set_current_func(TorchFunctionMode):
     def __torch_function__(self, func, types, args=(), kwargs=None):
@@ -50,7 +51,7 @@ class Quantizer:
         self.function_types = {}
         self.function_based_memory = {}
         self.use_rp = {}
-        
+        self.num_tries = 3
 
         self.iter = 0  # total number of iterations, including the extra inter for auto precision
         # iteration for seed, share the same seed_iter for the same auto precision adaptive step
@@ -164,7 +165,23 @@ class Quantizer:
             #if self.bits[tid] == 1 and self.function_types[tid] in ['linear']:
             if self.use_rp[tid]:
                 #print("linear pack")
-                q_inputs = self.pack_linear(input, float(bit)/32, self.seeds[tid] + self.seed_iter)
+                # multiply by 2 as we half later
+                try_id = 1
+                q_inputs = self.pack_linear(input, 2*float(bit)/32, self.seeds[tid] + (self.seed_iter))
+                best_error = q_inputs[-1]
+                while (try_id < self.num_tries) :
+                    temp =  self.pack_linear(input, 2*float(bit)/32, self.seeds[tid] + (self.seed_iter) + 1021*try_id)
+                    error = temp[-1]
+                    if error < best_error:
+                        del q_inputs
+                        q_inputs = temp
+                        best_error = error
+                    else:
+                        del temp
+                    #print("try", try_id, "error", error, "best error", best_error, flush=True)
+                    try_id += 1
+    
+                #q_inputs = self.pack_linear(input, 2*float(bit)/32, self.seeds[tid])
                 islinear = True
             else:
                 #if self.function_types[tid] == 'relu':
@@ -256,7 +273,7 @@ class Quantizer:
             assumes that model weights have already been filtered before this 
         '''
         orig_dtype = x.dtype
-        #x = x.half()
+        x = x.half()
         self.linear_packs += 1
         gen = torch.Generator()
         gen.manual_seed(seed)
@@ -289,15 +306,17 @@ class Quantizer:
             #print(compressed_x.view(-1))
 
         #print("PACK LINEAR", id(current_func), x.shape, "-->", compressed_x.shape)
+        uncompressed_x = self.unpack_linear((compressed_x,  shape, A, B, C, D, orig_dtype, 0))
+        error = torch.mean(torch.norm(x- uncompressed_x, dim=0))
         del x
-
-        return (compressed_x, shape, A, B, C, D, orig_dtype)
+        del uncompressed_x
+        return (compressed_x, shape, A, B, C, D, orig_dtype, error)
 
     def unpack_linear(self, x):
         ''' this function is to pack saved variables for linear layer 
             assumes that model weights have already been filtered before this 
         '''
-        compressed_x, shape, A, B, C, D, orig_dtype = x
+        compressed_x, shape, A, B, C, D, orig_dtype, err = x
         #print("UNPACK LINEAR", id(current_func), compressed_x.shape)
         cshape = compressed_x.shape
         x = torch.zeros(shape, dtype=compressed_x.dtype, device=compressed_x.device)
